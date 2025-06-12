@@ -185,9 +185,7 @@ async def get_download_list(
         assert version, "Version must be set in asset bundle info"
         asset_hash: str = game_version_json.get("assetHash", "")
         assert asset_hash, "Asset hash must be set in game version json"
-        app_version: str = (
-            config.APP_VERSION_OVERRIDE or game_version_json.get("appVersion") or ""
-        )
+        app_version: str = getattr(config, "APP_VERSION_OVERRIDE", None) or game_version_json.get("appVersion") or ""
         assert app_version, "App version must be set in game version json or config"
 
         download_list = [
