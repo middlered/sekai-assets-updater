@@ -3,7 +3,7 @@ import base64
 import logging
 import re
 import time
-from logging.handlers import QueueHandler
+from logging.handlers import QueueHandler, QueueListener
 from queue import SimpleQueue
 from typing import Dict, List, Tuple
 
@@ -45,9 +45,7 @@ def setup_logging_queue() -> None:
             root.removeHandler(h)
             handlers.append(h)
 
-    listener = logging.handlers.QueueListener(
-        queue, *handlers, respect_handler_level=True
-    )
+    listener = QueueListener(queue, *handlers, respect_handler_level=True)
     listener.start()
 
 
@@ -66,11 +64,11 @@ async def get_download_list(
     asset_bundle_info: Dict,
     game_version_json: Dict,
     config=None,
-    assetver: str = None,
-    assetbundle_host_hash: str = None,
-    include_list: List[str] = None,
-    exclude_list: List[str] = None,
-    priority_list: List[str] = None,
+    assetver: str | None = None,
+    assetbundle_host_hash: str | None = None,
+    include_list: List[str] | None = None,
+    exclude_list: List[str] | None = None,
+    priority_list: List[str] | None = None,
 ) -> List[Tuple[str, Dict]]:
     """Generate the download list for the asset bundles.
 
@@ -87,6 +85,13 @@ async def get_download_list(
 
     cached_asset_bundle_info = None
     cached_game_version_json = None
+    assert config, "Config must be provided to get_download_list"
+    assert config.ASSET_BUNDLE_INFO_CACHE_PATH, (
+        "ASSET_BUNDLE_INFO_CACHE_PATH must be set in config"
+    )
+    assert config.GAME_VERSION_JSON_CACHE_PATH, (
+        "GAME_VERSION_JSON_CACHE_PATH must be set in config"
+    )
     if await config.ASSET_BUNDLE_INFO_CACHE_PATH.exists():
         async with await open_file(config.ASSET_BUNDLE_INFO_CACHE_PATH) as f:
             cached_asset_bundle_info = json.loads(await f.read())
@@ -95,24 +100,40 @@ async def get_download_list(
             cached_game_version_json = json.loads(await f.read())
 
     download_list = []
+    current_bundles: Dict[str, Dict] = asset_bundle_info.get("bundles", {})
+    assert current_bundles, "bundles must be set in asset bundle info"
+    current_bundles = await filter_bundles(
+        current_bundles,
+        include_list=include_list,
+        exclude_list=exclude_list,
+    )
+    assert current_bundles, "No bundles found after filtering"
     if cached_asset_bundle_info and cached_game_version_json:
         if assetver:
             cached_assetver = cached_game_version_json.get("assetver", None)
             if cached_assetver != assetver:
                 game_version_json["assetver"] = assetver
 
-                cached_bundles: Dict = cached_asset_bundle_info.get("bundles")
-                current_bundles: Dict = asset_bundle_info.get("bundles")
+                cached_bundles: Dict[str, Dict] = cached_asset_bundle_info.get(
+                    "bundles"
+                )
 
                 changed_bundles = [
                     bundle
                     for bundle in current_bundles.values()
-                    if bundle.get("hash")
-                    != cached_bundles.get(bundle.get("bundleName"), {}).get("hash")
+                    if bundle.get("hash", "")
+                    != cached_bundles.get(bundle.get("bundleName", ""), {}).get("hash", "")
                 ]
 
                 # Generate the download list from changed bundles
-                app_version: str = config.APP_VERSION_OVERRIDE or game_version_json.get("appVersion")
+                app_version: str = (
+                    config.APP_VERSION_OVERRIDE
+                    or game_version_json.get("appVersion")
+                    or ""
+                )
+                assert app_version, (
+                    "App version must be set in game version json or config"
+                )
                 download_list = [
                     (
                         config.ASSET_BUNDLE_URL.format(
@@ -126,21 +147,22 @@ async def get_download_list(
                 ]
         else:
             # Colorful Palette servers
-            cached_bundles: Dict = cached_asset_bundle_info.get("bundles")
-            current_bundles: Dict = asset_bundle_info.get("bundles")
+            cached_bundles: Dict[str, Dict] = cached_asset_bundle_info.get("bundles")
 
             # compare hash of each bundle, if not equal, it should be included in the download list
             # it also includes the new bundles
             changed_bundles = [
                 bundle
                 for bundle in current_bundles.values()
-                if bundle.get("hash")
-                != cached_bundles.get(bundle.get("bundleName"), {}).get("hash")
+                if bundle.get("hash", "")
+                != cached_bundles.get(bundle.get("bundleName", ""), {}).get("hash", "")
             ]
 
             # Generate the download list from changed bundles
             version = asset_bundle_info.get("version")
-            asset_hash: str = game_version_json.get("assetHash")
+            assert version, "Version must be set in asset bundle info"
+            asset_hash: str = game_version_json.get("assetHash", "")
+            assert asset_hash, "Asset hash must be set in game version json"
             download_list = [
                 (
                     config.ASSET_BUNDLE_URL.format(
@@ -159,10 +181,14 @@ async def get_download_list(
             game_version_json["assetver"] = assetver
 
         # Get the download list for a full download
-        version = asset_bundle_info.get("version")
-        asset_hash: str = game_version_json.get("assetHash")
-        app_version: str = config.APP_VERSION_OVERRIDE or game_version_json.get("appVersion")
-        bundles: Dict = asset_bundle_info.get("bundles")
+        version = asset_bundle_info.get("version", "")
+        assert version, "Version must be set in asset bundle info"
+        asset_hash: str = game_version_json.get("assetHash", "")
+        assert asset_hash, "Asset hash must be set in game version json"
+        app_version: str = (
+            config.APP_VERSION_OVERRIDE or game_version_json.get("appVersion") or ""
+        )
+        assert app_version, "App version must be set in game version json or config"
 
         download_list = [
             (
@@ -176,46 +202,14 @@ async def get_download_list(
                 ),
                 bundle,
             )
-            for bundle in bundles.values()
+            for bundle in current_bundles.values()
         ]
 
     if download_list:
-        # Filter the download list
-        if include_list:
-            download_list = [
-                item
-                for item in download_list
-                if any(
-                    re.match(test_name, item[1].get("bundleName"))
-                    for test_name in include_list
-                )
-            ]
-
-        if exclude_list:
-            download_list = [
-                item
-                for item in download_list
-                if not any(
-                    re.match(test_name, item[1].get("bundleName"))
-                    for test_name in exclude_list
-                )
-            ]
-
-        # Sort the download list alphabetically by bundle name
-        download_list = sorted(
+        download_list = await sort_download_list(
             download_list,
-            key=lambda item: item[1].get("bundleName"),
+            priority_list=priority_list,
         )
-
-        if priority_list:
-            download_list = sorted(
-                download_list,
-                key=lambda item: [
-                    i
-                    for i, test_name in enumerate(priority_list)
-                    if re.match(test_name, item[1].get("bundleName"))
-                ],
-            )
 
     # Cache the download list
     if download_list:
@@ -224,7 +218,7 @@ async def get_download_list(
 
     # Cache the asset bundle info
     async with await open_file(config.ASSET_BUNDLE_INFO_CACHE_PATH, "wb") as f:
-        await f.write(json.dumps(asset_bundle_info, option=json.OPT_INDENT_2))
+        await f.write(json.dumps(current_bundles, option=json.OPT_INDENT_2))
 
     # Cache the game version json
     async with await open_file(config.GAME_VERSION_JSON_CACHE_PATH, "wb") as f:
@@ -233,8 +227,61 @@ async def get_download_list(
     return download_list
 
 
+async def filter_bundles(
+    bundles: Dict[str, Dict],
+    include_list: List[str] | None = None,
+    exclude_list: List[str] | None = None,
+) -> Dict[str, Dict]:
+    """Filter and sort the bundles based on include, exclude, and priority lists."""
+    if include_list:
+        bundles = {
+            key: value
+            for key, value in bundles.items()
+            if any(
+                re.match(test_name, value.get("bundleName") or "")
+                for test_name in include_list
+            )
+        }
+
+    if exclude_list:
+        bundles = {
+            key: value
+            for key, value in bundles.items()
+            if not any(
+                re.match(test_name, value.get("bundleName") or "")
+                for test_name in exclude_list
+            )
+        }
+
+    return bundles
+
+
+async def sort_download_list(
+    download_list: List[Tuple[str, Dict]],
+    priority_list: List[str] | None = None,
+) -> List[Tuple[str, Dict]]:
+    """Sort the download list alphabetically and then based on priority list."""
+    download_list = sorted(
+        download_list,
+        key=lambda item: item[1].get("bundleName") or "",
+    )
+
+    # If a priority list is provided, sort the download list based on it
+    if priority_list:
+        download_list = sorted(
+            download_list,
+            key=lambda item: [
+                i
+                for i, test_name in enumerate(priority_list)
+                if re.match(test_name, item[1].get("bundleName") or "")
+            ],
+        )
+
+    return download_list
+
+
 async def refresh_cookie(
-    config, headers: Dict[str, str], cookie: str = None
+    config, headers: Dict[str, str], cookie: str | None = None
 ) -> Tuple[Dict[str, str], str]:
     """Refresh the cookie using the GAME_COOKIE_URL."""
     if cookie:
@@ -254,6 +301,7 @@ async def refresh_cookie(
             ) as response:
                 if response.status == 200:
                     cookie = response.headers.get("Set-Cookie")
+                    assert cookie, "Cookie is empty"
                     headers["Cookie"] = cookie
                 else:
                     raise RuntimeError(
