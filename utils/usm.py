@@ -218,7 +218,7 @@ def mask_audio(content, amask):
     return _content
 
 
-def extract_usm(usm, target_dir, *args):
+def extract_usm(usm, target_dir, fallback_name = b'', *args):
     usm_file = BinaryStream(usm, "big")
     
     offset = 0
@@ -231,7 +231,7 @@ def extract_usm(usm, target_dir, *args):
     block_size = usm_file.readUInt32()
     usm_file.base_stream.seek(0x20)
     entry_table = get_utf_table(usm_file)
-    filename = entry_table[len(entry_table) - 1][b"filename"]
+    filename = entry_table[len(entry_table) - 1][b"filename"] if b'filename' in entry_table[len(entry_table) - 1] else fallback_name
     offset += 8 + block_size
 
     usm_file.base_stream.seek(offset)

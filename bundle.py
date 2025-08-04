@@ -476,7 +476,7 @@ async def extract_asset_bundle(
             async with await open_file(usm_output_path, "rb") as f:
                 usm_data = await f.read()
                 extracted_movie_files = extract_usm(
-                    BytesIO(usm_data), save_dir.as_posix()
+                    BytesIO(usm_data), save_dir.as_posix(), usm_output_name.encode()
                 )
 
             # remove the usm file
