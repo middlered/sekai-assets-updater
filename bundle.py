@@ -466,8 +466,16 @@ async def extract_asset_bundle(
                             )
                     async with await open_file(usm_split_path, "rb") as infile:
                         await outfile.write(await infile.read())
-                    exported_files.remove(usm_split_path)
-                    await usm_split_path.unlink()
+                    try:
+                        exported_files.remove(usm_split_path)
+                        await usm_split_path.unlink()
+                    except ValueError:
+                        # maybe case-sensitive issue
+                        usm_split_path_lower = usm_split_path.with_name(
+                            usm_split_path.name.lower()
+                        )
+                        exported_files.remove(usm_split_path_lower)
+                        await usm_split_path_lower.unlink()
 
                 logger.debug("Merged %s to %s", usm_split_filenames, usm_output_name)
                 exported_files.append(usm_output_path)
