@@ -371,4 +371,4 @@ async def upload_to_storage(
                 logger.info("Successfully uploaded %s to %s", file_path, remote_path)
 
     # Run uploads concurrently
-    await asyncio.gather(*(upload_file(file_path) for file_path in exported_list))
+    await asyncio.gather(*(upload_file(file_path) for file_path in exported_list), return_exceptions=True)

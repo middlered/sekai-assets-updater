@@ -28,9 +28,10 @@ async def worker(
     tmp_bundle_save_file = None
     if isinstance(config.ASSET_LOCAL_BUNDLE_CACHE_DIR, Path):
         # Save the bundle to the local directory
-        bundle_save_path: Path = (
+        bundle_save_path = (
             config.ASSET_LOCAL_BUNDLE_CACHE_DIR / bundle["bundleName"]
         )
+        assert bundle_save_path is not None
         # Create the directory if it doesn't exist
         await bundle_save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -66,6 +67,7 @@ async def worker(
         extracted_save_path = Path(tmp_extracted_save_dir.name)
 
     try:
+        assert bundle_save_path is not None
         # Extract the bundle
         exported_list = await extract_asset_bundle(
             bundle_save_path,
@@ -89,6 +91,14 @@ async def worker(
                         storage["args"],
                         max_concurrent_uploads=config.MAX_CONCURRENCY_UPLOADS,
                     )
+    except Exception as e:
+        logger.error(
+            "worker %s failed processing %s: %s",
+            name,
+            bundle.get("bundleName", url),
+            str(e),
+        )
+        raise e
     finally:
         # Clean up the temporary bundle file
         if tmp_bundle_save_file:
