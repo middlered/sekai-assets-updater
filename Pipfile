@@ -10,6 +10,7 @@ pycryptodome = "*"
 anyio = "*"
 orjson = "*"
 unitypy = "*"
+olefile = "*"
 
 [dev-packages]
 
